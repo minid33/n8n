@@ -1,6 +1,7 @@
 import { DynamicStructuredTool, type DynamicStructuredToolInput } from '@langchain/core/tools';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { CompatibilityCallToolResultSchema } from '@modelcontextprotocol/sdk/types.js';
 import { Toolkit } from 'langchain/agents';
 import {
@@ -14,7 +15,12 @@ import { z } from 'zod';
 
 import { convertJsonSchemaToZod } from '@utils/schemaParsing';
 
-import type { McpAuthenticationOption, McpTool, McpToolIncludeMode } from './types';
+import type {
+	McpAuthenticationOption,
+	McpTool,
+	McpToolIncludeMode,
+	McpTransportOption,
+} from './types';
 
 export async function getAllTools(client: Client, cursor?: string): Promise<McpTool[]> {
 	const { tools, nextCursor } = await client.listTools({ cursor });
@@ -145,42 +151,52 @@ type ConnectMcpClientError =
 	| { type: 'connection'; error: Error };
 export async function connectMcpClient({
 	headers,
-	sseEndpoint,
+	endpoint,
 	name,
 	version,
+	transport = 'sse',
 }: {
-	sseEndpoint: string;
+	endpoint: string;
 	headers?: Record<string, string>;
 	name: string;
 	version: number;
+	transport?: McpTransportOption;
 }): Promise<Result<Client, ConnectMcpClientError>> {
 	try {
-		const endpoint = normalizeAndValidateUrl(sseEndpoint);
+		const validated = normalizeAndValidateUrl(endpoint);
 
-		if (!endpoint.ok) {
-			return createResultError({ type: 'invalid_url', error: endpoint.error });
+		if (!validated.ok) {
+			return createResultError({ type: 'invalid_url', error: validated.error });
 		}
 
-		const transport = new SSEClientTransport(endpoint.result, {
-			eventSourceInit: {
-				fetch: async (url, init) =>
-					await fetch(url, {
-						...init,
-						headers: {
-							...headers,
-							Accept: 'text/event-stream',
+		const url = validated.result;
+		const transportInstance =
+			transport === 'streamableHttp'
+				? new StreamableHTTPClientTransport(url, {
+						requestInit: {
+							headers: {
+								Accept: 'application/json, text/event-stream',
+								...headers,
+							},
 						},
-					}),
-			},
-			requestInit: { headers },
-		});
+					})
+				: new SSEClientTransport(url, {
+						eventSourceInit: {
+							fetch: async (u, init) =>
+								await fetch(u, {
+									...init,
+									headers: { ...headers, Accept: 'text/event-stream' },
+								}),
+						},
+						requestInit: { headers },
+					});
 
 		const client = new Client(
 			{ name, version: version.toString() },
 			{ capabilities: { tools: {} } },
 		);
 
-		await client.connect(transport);
+		await client.connect(transportInstance);
 		return createResultOk(client);
 	} catch (error) {
 		return createResultError({ type: 'connection', error });
