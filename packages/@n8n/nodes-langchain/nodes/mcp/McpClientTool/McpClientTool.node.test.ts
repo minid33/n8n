@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { mock } from 'jest-mock-extended';
 import {
 	NodeOperationError,
@@ -13,6 +14,7 @@ import { McpClientTool } from './McpClientTool.node';
 import { McpToolkit } from './utils';
 
 jest.mock('@modelcontextprotocol/sdk/client/sse.js');
+jest.mock('@modelcontextprotocol/sdk/client/streamableHttp.js');
 jest.mock('@modelcontextprotocol/sdk/client/index.js');
 
 describe('McpClientTool', () => {
@@ -83,6 +85,12 @@ describe('McpClientTool', () => {
 					getNode: jest.fn(() => mock<INode>({ typeVersion: 1 })),
 					logger: { debug: jest.fn(), error: jest.fn() },
 					addInputData: jest.fn(() => ({ index: 0 })),
+					getNodeParameter: jest.fn((key) => {
+						const parameters: Record<string, any> = {
+							transport: 'sse',
+						};
+						return parameters[key];
+					}),
 				}),
 				0,
 			);
@@ -125,6 +133,7 @@ describe('McpClientTool', () => {
 						const parameters: Record<string, any> = {
 							include: 'selected',
 							includeTools: ['MyTool2'],
+							transport: 'sse',
 						};
 						return parameters[key];
 					}),
@@ -170,6 +179,7 @@ describe('McpClientTool', () => {
 						const parameters: Record<string, any> = {
 							include: 'except',
 							excludeTools: ['MyTool2'],
+							transport: 'sse',
 						};
 						return parameters[key];
 					}),
@@ -207,7 +217,8 @@ describe('McpClientTool', () => {
 							include: 'except',
 							excludeTools: ['MyTool2'],
 							authentication: 'headerAuth',
-							sseEndpoint: 'https://my-mcp-endpoint.ai/sse',
+							endpoint: 'https://my-mcp-endpoint.ai/sse',
+							transport: 'sse',
 						};
 						return parameters[key];
 					}),
@@ -256,7 +267,8 @@ describe('McpClientTool', () => {
 							include: 'except',
 							excludeTools: ['MyTool2'],
 							authentication: 'bearerAuth',
-							sseEndpoint: 'https://my-mcp-endpoint.ai/sse',
+							endpoint: 'https://my-mcp-endpoint.ai/sse',
+							transport: 'sse',
 						};
 						return parameters[key];
 					}),
@@ -282,6 +294,48 @@ describe('McpClientTool', () => {
 			await customFetch?.(url);
 			expect(fetchSpy).toHaveBeenCalledWith(url, {
 				headers: { Accept: 'text/event-stream', Authorization: 'Bearer my-token' },
+			});
+		});
+
+		it('should support the streamable http transport', async () => {
+			jest.spyOn(Client.prototype, 'connect').mockResolvedValue();
+			jest.spyOn(Client.prototype, 'listTools').mockResolvedValue({
+				tools: [
+					{
+						name: 'MyTool1',
+						description: 'MyTool1 does something',
+						inputSchema: { type: 'object', properties: { input: { type: 'string' } } },
+					},
+				],
+			});
+
+			const supplyDataResult = await new McpClientTool().supplyData.call(
+				mock<ISupplyDataFunctions>({
+					getNode: jest.fn(() => mock<INode>({ typeVersion: 1 })),
+					getNodeParameter: jest.fn((key, _index) => {
+						const parameters: Record<string, any> = {
+							include: 'except',
+							excludeTools: ['MyTool2'],
+							transport: 'streamableHttp',
+							endpoint: 'https://my-mcp-endpoint.ai/http',
+						};
+						return parameters[key];
+					}),
+					logger: { debug: jest.fn(), error: jest.fn() },
+					addInputData: jest.fn(() => ({ index: 0 })),
+				}),
+				0,
+			);
+
+			expect(supplyDataResult.closeFunction).toBeInstanceOf(Function);
+			expect(supplyDataResult.response).toBeInstanceOf(McpToolkit);
+
+			const url = new URL('https://my-mcp-endpoint.ai/http');
+			expect(StreamableHTTPClientTransport).toHaveBeenCalledTimes(1);
+			expect(StreamableHTTPClientTransport).toHaveBeenCalledWith(url, {
+				requestInit: {
+					headers: { Accept: 'application/json, text/event-stream' },
+				},
 			});
 		});
 	});
